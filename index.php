@@ -3,20 +3,18 @@
 $databaseUrl = getenv('DATABASE_URL');
 
 if (!$databaseUrl) {
-    die("Error crítico: No se encontró la variable de entorno DATABASE_URL");
+    die("Error crítico: No se encontró DATABASE_URL");
 }
 
-// Desarmamos la URL
 $db = parse_url($databaseUrl);
 
-// CORRECCIÓN: Si el puerto no viene en la URL, usamos el 5432 por defecto
+// FIX 1: Manejo seguro del puerto (Para arreglar el error de la Imagen 1)
 $port = isset($db['port']) ? $db['port'] : '5432';
 
-// Construimos el DSN con el puerto seguro
 $dsn = "pgsql:" . sprintf(
     "host=%s;port=%s;user=%s;password=%s;dbname=%s;sslmode=require",
     $db['host'],
-    $port, // Usamos la variable validada
+    $port,
     $db['user'],
     $db['pass'],
     ltrim($db['path'], "/")
@@ -28,21 +26,21 @@ $filtro_pais = isset($_GET['pais']) ? $_GET['pais'] : '';
 $error = null;
 
 try {
-    // Conexión
     $pdo = new PDO($dsn);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
-    // --- 2. OBTENER LISTA DE PAÍSES ---
+    // Obtener lista de países
     $stmtPaises = $pdo->query("SELECT DISTINCT pais FROM dim_pais ORDER BY pais");
     $paises_para_filtro = $stmtPaises->fetchAll(PDO::FETCH_COLUMN);
 
-    // --- 3. CONSTRUIR LA CONSULTA OLAP ---
+    // --- 2. CONSULTA OLAP MEJORADA ---
+    // FIX 2: Agregamos COALESCE(SUM(...), 0) para evitar que number_format falle
     $sql = "
         SELECT 
             COALESCE(p.pais, 'TOTAL GLOBAL') as pais,
             COALESCE(prod.categoria, 'TODAS') as categoria,
-            SUM(v.total_dinero) as venta_total,
-            SUM(v.cantidad) as unidades
+            COALESCE(SUM(v.total_dinero), 0) as venta_total, 
+            COALESCE(SUM(v.cantidad), 0) as unidades
         FROM fact_ventas v
         JOIN dim_pais p ON v.pais_id = p.id
         JOIN dim_producto prod ON v.producto_id = prod.id
@@ -73,7 +71,7 @@ try {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard OLAP Seguro</title>
+    <title>Reporte OLAP Final</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background-color: #f4f4f9; padding: 20px; color: #333; }
         .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.05); }
@@ -88,6 +86,7 @@ try {
         .fila-subtotal { background-color: #e8f5e9; color: #2e7d32; font-weight: bold; }
         .fila-total-global { background-color: #2c3e50; color: #fff; font-weight: bold; font-size: 1.1em;}
         .fila-normal { color: #555; }
+        .zero-val { color: #aaa; } /* Estilo para valores en cero */
     </style>
 </head>
 <body>
@@ -131,16 +130,19 @@ try {
                             $claseCss = "fila-normal";
                             if ($fila['pais'] === 'TOTAL GLOBAL') $claseCss = "fila-total-global";
                             elseif ($fila['categoria'] === 'TODAS') $claseCss = "fila-subtotal";
+                            
+                            // FIX 3: Aseguramos que sea float para evitar warnings, aunque el SQL ya lo hace
+                            $venta = (float)$fila['venta_total'];
                         ?>
                         <tr class="<?= $claseCss ?>">
                             <td><?= htmlspecialchars($fila['pais']) ?></td>
                             <td><?= htmlspecialchars($fila['categoria']) ?></td>
-                            <td>$<?= number_format($fila['venta_total'], 2) ?></td>
+                            <td>$<?= number_format($venta, 2) ?></td>
                             <td><?= $fila['unidades'] ?></td>
                         </tr>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <tr><td colspan="4" style="text-align:center">No hay datos.</td></tr>
+                    <tr><td colspan="4" style="text-align:center">No hay datos para mostrar.</td></tr>
                 <?php endif; ?>
             </tbody>
         </table>
